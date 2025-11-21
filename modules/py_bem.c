@@ -3,7 +3,7 @@
 #include "py/obj.h"
 #include <stdint.h>
 #include <stddef.h>
- 
+
 // We can write a function which will be called from Python as -function_name()- not sure if we still need this
 // if we have the core functions/parameters define in the wrap function call
 
