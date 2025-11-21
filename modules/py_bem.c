@@ -3,9 +3,8 @@
 #include "py/obj.h"
 #include <stdint.h>
 #include <stddef.h>
-
-// We can write a function which will be called from Python as -function_name()- not sure if we still need this
-// if we have the core functions/parameters define in the wrap function call
+#include "fb_alloc.h"
+#include <string.h>
 
 uint8_t* BEM(int width, int height, int** events, int event_size, uint8_t* output_buffer) {
     // Step 1: Allocate temporary signed integer array for counting
@@ -29,52 +28,71 @@ uint8_t* BEM(int width, int height, int** events, int event_size, uint8_t* outpu
         }
     }
     
-    // Step 3: Convert to binary (0 or 1) - your exact logic
-    uint8_t* bem = output_buffer ? output_buffer : fb_alloc(width * height, FB_ALLOC_NO_HINT);
+    // Step 3: Convert to binary (0 or 1) - write directly to output_buffer
     for (int i = 0; i < width * height; i++) {
-        bem[i] = (temp_bem[i] != 0) ? 1 : 0;
+        output_buffer[i] = (temp_bem[i] != 0) ? 1 : 0;
     }
-    // check output_buffer = NULL?
-
+    
     // Step 4: Free temporary buffer
     fb_free();  // Frees the most recent allocation (temp_bem)
     
-    return bem;
+    return output_buffer;
 }
 
-// This is the function which will be called from Python as bem.BEM(width, height, events, len(events))
-static mp_obj_t py_bem(mp_obj_t width_obj, mp_obj_t height_obj,
-                        mp_obj_t events_obj, mp_obj_t event_size_obj){
+// Modified function signature to accept output buffer
+mp_obj_t py_bem(size_t n_args, const mp_obj_t *args) {
+    // Extract the arguments: width, height, events, event_size, output_buffer
+    mp_obj_t width_obj = args[0];
+    mp_obj_t height_obj = args[1];
+    mp_obj_t events_obj = args[2];
+    mp_obj_t event_size_obj = args[3];
+    mp_obj_t output_obj = args[4];  // The pre-allocated output buffer
+    
     int width = mp_obj_get_int(width_obj);
     int height = mp_obj_get_int(height_obj);
     int event_size = mp_obj_get_int(event_size_obj);
-
-    // have a pointer to locate
-    mp_obj_t *event_list;
-    mp_obj_get_array_fixed_n(events_obj, event_size, &event_list);
-
+    
+    // Get the output buffer from numpy array
+    mp_buffer_info_t output_bufinfo;
+    mp_get_buffer_raise(output_obj, &output_bufinfo, MP_BUFFER_WRITE);
+    uint8_t *output_buffer = (uint8_t *)output_bufinfo.buf;
+    
+    // Get buffer info from numpy array (events)
+    mp_buffer_info_t bufinfo;
+    mp_get_buffer_raise(events_obj, &bufinfo, MP_BUFFER_READ);
+    
+    // events_obj should be a 2D array with shape (event_size, 6)
+    uint16_t *event_data = (uint16_t *)bufinfo.buf;
+    
+    // Create int** array for BEM function
     int **events = m_new(int*, event_size);
-    for (int i = 0; i < event_size, i++){ // start looping through all the event 
-        mp_obj_t *event_data
-        mp_obj_get_array_fixed_n(event_list[i], 6, &event_data);
-        events[i] = m_new(int, 6); // update the events
-
-        for (int j = 0; j < 6; j++);{
-            events[i][j] = mp_obj_get_int(event_data[j]);
+    for (int i = 0; i < event_size; i++) {
+        events[i] = m_new(int, 6);
+        for (int j = 0; j < 6; j++) {
+            events[i][j] = (int)event_data[i * 6 + j];
         }
     }
-
-    uint8_t *output = BEM(width, height, events, event_size, NULL);
-
-    return mp_obj_new_bytearray_by_ref(width * height, output);
+    
+    // Call BEM with the pre-allocated output buffer
+    BEM(width, height, events, event_size, output_buffer);
+    
+    // Free the allocated event arrays
+    for (int i = 0; i < event_size; i++) {
+        m_del(int, events[i], 6);
+    }
+    m_del(int*, events, event_size);
+    
+    // Return None since we modified the buffer in-place
+    return mp_const_none;
 }
 
-static MP_DEFINE_CONST_FUN_OBJ_4(py_bem_obj, py_bem);
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(py_bem_obj, 5, 5, py_bem);  // Changed to 5 args
 
 static const mp_rom_map_elem_t bem_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_bem) },
     { MP_ROM_QSTR(MP_QSTR_BEM), MP_ROM_PTR(&py_bem_obj) },
 };
+
 static MP_DEFINE_CONST_DICT(bem_globals, bem_globals_table);
 
 // Define module object.
